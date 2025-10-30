@@ -1,0 +1,856 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, RotateCcw, Crown, Swords, ArrowRight, Pause, PlayCircle } from 'lucide-react';
+
+const ShizugatakaGame = () => {
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+  const [gameState, setGameState] = useState('menu');
+  const [time, setTime] = useState(420);
+  const [bases, setBases] = useState([]);
+  const [units, setUnits] = useState([]);
+  const [selectedBase, setSelectedBase] = useState(null);
+  const [supplyMode, setSupplyMode] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [territory, setTerritory] = useState({ hashiba: 0, shibata: 0 });
+  const [fortControl, setFortControl] = useState({ hashiba: 0, shibata: 0, hashibaTimer: 0, shibataTimer: 0 });
+  const [winner, setWinner] = useState(null);
+  const [difficulty, setDifficulty] = useState(null);
+  const [canvasSize, setCanvasSize] = useState({ width: 900, height: 700 });
+  const [scale, setScale] = useState(1);
+
+  const BASE_WIDTH = 900;
+  const BASE_HEIGHT = 700;
+  const BASE_RADIUS = 28;
+  const UNIT_RADIUS = 5;
+  const UNIT_SPEED = 0.6;
+  const SPAWN_INTERVAL = 5400;
+  const COMBAT_RANGE = 35;
+  const SUPPLY_INTERVAL = 9000;
+
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+
+  // Responsive canvas sizing
+  useEffect(() => {
+    const updateSize = () => {
+      if (containerRef.current) {
+        const maxWidth = Math.min(window.innerWidth - 32, BASE_WIDTH);
+        const maxHeight = Math.min(window.innerHeight - 32, BASE_HEIGHT);
+        
+        const scaleX = maxWidth / BASE_WIDTH;
+        const scaleY = maxHeight / BASE_HEIGHT;
+        const newScale = Math.min(scaleX, scaleY, 1);
+        
+        setCanvasSize({
+          width: BASE_WIDTH * newScale,
+          height: BASE_HEIGHT * newScale
+        });
+        setScale(newScale);
+      }
+    };
+
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, []);
+
+  // Initialize game
+  const initGame = (selectedDifficulty) => {
+    // Advanced: enemy +1, player -1
+    const playerBonus = selectedDifficulty === 'advanced' ? -1 : 0;
+    const enemyBonus = selectedDifficulty === 'advanced' ? 1 : 0;
+    
+    const newBases = [
+      { id: 'h_hq', x: 450, y: 600, team: 'hashiba', type: 'hq', units: 20 + playerBonus, maxUnits: 120, 
+        name: '羽柴秀吉本陣', commander: '秀吉', canProduce: true },
+      { id: 'h1', x: 300, y: 550, team: 'hashiba', type: 'normal', units: 15 + playerBonus, maxUnits: 60, 
+        name: '中川清秀', commander: '中川', canProduce: true },
+      { id: 'h2', x: 600, y: 550, team: 'hashiba', type: 'normal', units: 15 + playerBonus, maxUnits: 60, 
+        name: '高山右近', commander: '高山', canProduce: true },
+      { id: 'h3', x: 200, y: 500, team: 'hashiba', type: 'elite', units: 10 + playerBonus, maxUnits: 70, 
+        name: '賤ヶ岳七本槍', commander: '七本槍', canProduce: true },
+      { id: 'h4', x: 700, y: 500, team: 'hashiba', type: 'normal', units: 10 + playerBonus, maxUnits: 60, 
+        name: '蜂須賀正勝', commander: '蜂須賀', canProduce: true },
+      
+      { id: 'n1', x: 350, y: 350, team: 'neutral', type: 'fort', units: 0, maxUnits: 50, 
+        name: '岩崎山砦', canProduce: false },
+      { id: 'n2', x: 550, y: 350, team: 'neutral', type: 'fort', units: 0, maxUnits: 50, 
+        name: '賤ヶ岳砦', canProduce: false },
+      { id: 'n3', x: 450, y: 300, team: 'neutral', type: 'fort', units: 0, maxUnits: 50, 
+        name: '田上山砦', canProduce: false },
+      
+      { id: 's_hq', x: 450, y: 100, team: 'shibata', type: 'hq', units: 20 + enemyBonus, maxUnits: 120, 
+        name: '柴田勝家本陣', commander: '勝家', canProduce: true },
+      { id: 's1', x: 300, y: 150, team: 'shibata', type: 'normal', units: 15 + enemyBonus, maxUnits: 60, 
+        name: '佐久間盛政', commander: '盛政', canProduce: true },
+      { id: 's2', x: 600, y: 150, team: 'shibata', type: 'normal', units: 15 + enemyBonus, maxUnits: 60, 
+        name: '柴田勝政', commander: '勝政', canProduce: true },
+      { id: 's3', x: 200, y: 200, team: 'shibata', type: 'normal', units: 10 + enemyBonus, maxUnits: 60, 
+        name: '前田利家', commander: '利家', canProduce: true },
+      { id: 's4', x: 700, y: 200, team: 'shibata', type: 'normal', units: 10 + enemyBonus, maxUnits: 60, 
+        name: '金森長近', commander: '金森', canProduce: true }
+    ];
+    
+    setBases(newBases);
+    setUnits([]);
+    setSelectedBase(null);
+    setSupplyMode(false);
+    setIsPaused(false);
+    setTime(420);
+    setFortControl({ hashiba: 0, shibata: 0, hashibaTimer: 0, shibataTimer: 0 });
+    setWinner(null);
+    setDifficulty(selectedDifficulty);
+    setGameState('playing');
+  };
+
+  // Spawn units
+  useEffect(() => {
+    if (gameState !== 'playing' || isPaused) return;
+    
+    const interval = setInterval(() => {
+      setBases(prev => prev.map(base => {
+        if (base.team !== 'neutral' && base.canProduce && base.units < base.maxUnits) {
+          const spawnRate = base.type === 'elite' ? 2 : 1;
+          return { ...base, units: Math.min(base.units + spawnRate, base.maxUnits) };
+        }
+        return base;
+      }));
+    }, SPAWN_INTERVAL);
+    
+    return () => clearInterval(interval);
+  }, [gameState, isPaused]);
+
+  // Timer
+  useEffect(() => {
+    if (gameState !== 'playing' || isPaused) return;
+    
+    const interval = setInterval(() => {
+      setTime(prev => {
+        if (prev <= 1) {
+          endGame('time');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [gameState, isPaused]);
+
+  // AI supply system (Advanced difficulty only)
+  useEffect(() => {
+    if (gameState !== 'playing' || isPaused || difficulty !== 'advanced') return;
+    
+    const supplyInterval = setInterval(() => {
+      const shibataBases = bases.filter(b => b.team === 'shibata' && b.canProduce && b.units > 15);
+      const shibataForts = bases.filter(b => b.team === 'shibata' && !b.canProduce && b.units < b.maxUnits * 0.7);
+      
+      if (shibataBases.length > 0 && shibataForts.length > 0) {
+        const supplyBase = shibataBases[Math.floor(Math.random() * shibataBases.length)];
+        const targetFort = shibataForts[Math.floor(Math.random() * shibataForts.length)];
+        
+        const supplyAmount = Math.floor(supplyBase.units * 0.3);
+        if (supplyAmount > 5) {
+          sendUnits(supplyBase.id, targetFort.id, supplyAmount, true);
+        }
+      }
+    }, SUPPLY_INTERVAL);
+    
+    return () => clearInterval(supplyInterval);
+  }, [gameState, bases, isPaused, difficulty]);
+
+  // Aggressive AI
+  useEffect(() => {
+    if (gameState !== 'playing' || isPaused) return;
+    
+    const aiInterval = setInterval(() => {
+      const shibataBases = bases.filter(b => b.team === 'shibata' && b.units > 8);
+      
+      shibataBases.forEach(shibataBase => {
+        if (shibataBase.units < 10) return;
+        
+        const enemyBases = bases.filter(b => b.team === 'hashiba');
+        const neutralBases = bases.filter(b => b.team === 'neutral');
+        const allTargets = [...enemyBases, ...neutralBases];
+        
+        let target = null;
+        
+        if (shibataBase.id === 's1' && Math.random() > 0.2) {
+          const nearTargets = allTargets.filter(t => {
+            const dist = Math.sqrt((t.x - shibataBase.x) ** 2 + (t.y - shibataBase.y) ** 2);
+            return dist < 350;
+          });
+          if (nearTargets.length > 0) {
+            target = nearTargets[Math.floor(Math.random() * nearTargets.length)];
+          }
+        } else {
+          if (Math.random() > 0.35 && enemyBases.length > 0) {
+            const enemyHQ = enemyBases.find(b => b.type === 'hq');
+            if (enemyHQ && enemyHQ.units < 40 && Math.random() > 0.5) {
+              target = enemyHQ;
+            } else {
+              target = allTargets.reduce((closest, base) => {
+                const dist = Math.sqrt((base.x - shibataBase.x) ** 2 + (base.y - shibataBase.y) ** 2);
+                const closestDist = Math.sqrt((closest.x - shibataBase.x) ** 2 + (closest.y - shibataBase.y) ** 2);
+                return dist < closestDist ? base : closest;
+              });
+            }
+          } else if (neutralBases.length > 0) {
+            target = neutralBases[Math.floor(Math.random() * neutralBases.length)];
+          }
+        }
+        
+        if (target) {
+          const sendRatio = 0.65 + Math.random() * 0.25;
+          const count = Math.floor(shibataBase.units * sendRatio);
+          if (count > 5) {
+            sendUnits(shibataBase.id, target.id, count, false);
+          }
+        }
+      });
+    }, 1400);
+    
+    return () => clearInterval(aiInterval);
+  }, [gameState, bases, isPaused]);
+
+  // Send units
+  const sendUnits = (fromId, toId, count, isSupply = false) => {
+    const fromBase = bases.find(b => b.id === fromId);
+    const toBase = bases.find(b => b.id === toId);
+    
+    if (!fromBase || !toBase || fromBase.units < count) return;
+    
+    setBases(prev => prev.map(b => 
+      b.id === fromId ? { ...b, units: b.units - count } : b
+    ));
+    
+    const newUnits = [];
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const spread = Math.random() * 15;
+      newUnits.push({
+        id: Date.now() + Math.random(),
+        x: fromBase.x,
+        y: fromBase.y,
+        targetX: toBase.x,
+        targetY: toBase.y,
+        targetId: toId,
+        team: fromBase.team,
+        isElite: fromBase.type === 'elite',
+        isSupply: isSupply
+      });
+    }
+    
+    setUnits(prev => [...prev, ...newUnits]);
+  };
+
+  // Update units with combat
+  useEffect(() => {
+    if (gameState !== 'playing' || isPaused) return;
+    
+    const animationFrame = setInterval(() => {
+      setUnits(prev => {
+        let updatedUnits = [...prev];
+        const arrivedUnits = {};
+        const deadUnits = new Set();
+        
+        updatedUnits.forEach((unit, i) => {
+          if (deadUnits.has(unit.id) || unit.isSupply) return;
+          
+          updatedUnits.forEach((other, j) => {
+            if (i !== j && unit.team !== other.team && !deadUnits.has(other.id) && !other.isSupply) {
+              const dx = other.x - unit.x;
+              const dy = other.y - unit.y;
+              const distance = Math.sqrt(dx * dx + dy * dy);
+              
+              if (distance < COMBAT_RANGE) {
+                const unitChance = unit.isElite ? 0.65 : 0.5;
+                if (Math.random() > unitChance) {
+                  deadUnits.add(unit.id);
+                } else {
+                  deadUnits.add(other.id);
+                }
+              }
+            }
+          });
+        });
+        
+        updatedUnits = updatedUnits.filter(unit => !deadUnits.has(unit.id));
+        
+        const movingUnits = [];
+        
+        updatedUnits.forEach(unit => {
+          const dx = unit.targetX - unit.x;
+          const dy = unit.targetY - unit.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          if (distance < UNIT_SPEED * 2) {
+            if (!arrivedUnits[unit.targetId]) {
+              arrivedUnits[unit.targetId] = {};
+            }
+            if (!arrivedUnits[unit.targetId][unit.team]) {
+              arrivedUnits[unit.targetId][unit.team] = { attack: 0, supply: 0 };
+            }
+            if (unit.isSupply) {
+              arrivedUnits[unit.targetId][unit.team].supply++;
+            } else {
+              arrivedUnits[unit.targetId][unit.team].attack++;
+            }
+          } else {
+            const angle = Math.atan2(dy, dx);
+            const speed = unit.isElite ? UNIT_SPEED * 1.2 : UNIT_SPEED;
+            movingUnits.push({
+              ...unit,
+              x: unit.x + Math.cos(angle) * speed,
+              y: unit.y + Math.sin(angle) * speed
+            });
+          }
+        });
+        
+        Object.keys(arrivedUnits).forEach(baseId => {
+          setBases(prevBases => {
+            return prevBases.map(base => {
+              if (base.id === baseId) {
+                const arriving = arrivedUnits[baseId];
+                let newUnits = base.units;
+                let newTeam = base.team;
+                
+                if (base.team === 'neutral' && base.type === 'fort') {
+                  const teams = Object.keys(arriving);
+                  if (teams.length > 0) {
+                    let maxTeam = teams[0];
+                    let maxUnits = (arriving[teams[0]].attack || 0) + (arriving[teams[0]].supply || 0);
+                    
+                    teams.forEach(team => {
+                      const total = (arriving[team].attack || 0) + (arriving[team].supply || 0);
+                      if (total > maxUnits) {
+                        maxTeam = team;
+                        maxUnits = total;
+                      }
+                    });
+                    
+                    newTeam = maxTeam;
+                    newUnits = 0;
+                  }
+                }
+                
+                if (arriving[newTeam]) {
+                  newUnits += (arriving[newTeam].supply || 0);
+                }
+                
+                Object.keys(arriving).forEach(team => {
+                  if (team !== newTeam) {
+                    const attackPower = arriving[team].attack || 0;
+                    if (newUnits >= attackPower) {
+                      newUnits -= attackPower;
+                    } else {
+                      newUnits = attackPower - newUnits;
+                      newTeam = team;
+                    }
+                  } else {
+                    newUnits += (arriving[team].attack || 0);
+                  }
+                });
+                
+                newUnits = Math.min(newUnits, base.maxUnits);
+                
+                if (base.type === 'hq' && base.team !== newTeam) {
+                  endGame(newTeam);
+                }
+                
+                return { ...base, units: newUnits, team: newTeam };
+              }
+              return base;
+            });
+          });
+        });
+        
+        return movingUnits;
+      });
+    }, 1000 / 60);
+    
+    return () => clearInterval(animationFrame);
+  }, [gameState, isPaused]);
+
+  // Calculate territory and fort control
+  useEffect(() => {
+    const hashibaCount = bases.filter(b => b.team === 'hashiba').length;
+    const shibataCount = bases.filter(b => b.team === 'shibata').length;
+    setTerritory({ hashiba: hashibaCount, shibata: shibataCount });
+
+    const hashibaForts = bases.filter(b => b.team === 'hashiba' && b.type === 'fort').length;
+    const shibataForts = bases.filter(b => b.team === 'shibata' && b.type === 'fort').length;
+    
+    setFortControl(prev => ({
+      hashiba: hashibaForts,
+      shibata: shibataForts,
+      hashibaTimer: prev.hashibaTimer,
+      shibataTimer: prev.shibataTimer
+    }));
+  }, [bases]);
+
+  // Fort control timer - fixed
+  useEffect(() => {
+    if (gameState !== 'playing' || isPaused) return;
+
+    const interval = setInterval(() => {
+      setFortControl(prev => {
+        let newHashibaTimer = prev.hashibaTimer;
+        let newShibataTimer = prev.shibataTimer;
+
+        if (prev.hashiba === 3) {
+          newHashibaTimer = prev.hashibaTimer + 0.1;
+          newShibataTimer = 0;
+          if (newHashibaTimer >= 10) {
+            setTimeout(() => endGame('hashiba-forts'), 0);
+            return prev;
+          }
+        } else if (prev.shibata === 3) {
+          newShibataTimer = prev.shibataTimer + 0.1;
+          newHashibaTimer = 0;
+          if (newShibataTimer >= 10) {
+            setTimeout(() => endGame('shibata-forts'), 0);
+            return prev;
+          }
+        } else {
+          newHashibaTimer = 0;
+          newShibataTimer = 0;
+        }
+
+        return {
+          hashiba: prev.hashiba,
+          shibata: prev.shibata,
+          hashibaTimer: newHashibaTimer,
+          shibataTimer: newShibataTimer
+        };
+      });
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [gameState, isPaused]);
+
+  // End game
+  const endGame = (reason) => {
+    setGameState('ended');
+    if (reason === 'time') {
+      setWinner(territory.hashiba > territory.shibata ? 'hashiba' : 
+               territory.shibata > territory.hashiba ? 'shibata' : 'draw');
+    } else if (reason === 'hashiba-forts' || reason === 'shibata-forts') {
+      setWinner(reason);
+    } else {
+      setWinner(reason);
+    }
+  };
+
+  // Handle canvas click/touch
+  const handleCanvasInteraction = (e) => {
+    if (gameState !== 'playing') return;
+    
+    e.preventDefault();
+    
+    const rect = canvasRef.current.getBoundingClientRect();
+    let clientX, clientY;
+    
+    if (e.type.startsWith('touch')) {
+      const touch = e.touches[0] || e.changedTouches[0];
+      clientX = touch.clientX;
+      clientY = touch.clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    
+    const x = (clientX - rect.left) / scale;
+    const y = (clientY - rect.top) / scale;
+    
+    // Find clicked base with larger hit area
+    const clickedBase = bases.find(b => {
+      const dist = Math.sqrt((b.x - x) ** 2 + (b.y - y) ** 2);
+      return dist < BASE_RADIUS * 1.5; // Larger click area
+    });
+    
+    if (clickedBase) {
+      // If clicking a friendly base
+      if (clickedBase.team === 'hashiba') {
+        if (supplyMode && selectedBase && selectedBase !== clickedBase.id) {
+          // Supply mode: send supply to clicked friendly base
+          const fromBase = bases.find(b => b.id === selectedBase);
+          if (fromBase && fromBase.units > 0) {
+            const count = Math.floor(fromBase.units * 0.5);
+            if (count > 0) {
+              sendUnits(selectedBase, clickedBase.id, count, true);
+            }
+          }
+          setSelectedBase(null);
+          setSupplyMode(false);
+        } else {
+          // Normal mode: select this base
+          setSelectedBase(clickedBase.id);
+        }
+      } 
+      // If clicking an enemy or neutral base
+      else if (clickedBase.team === 'shibata' || clickedBase.team === 'neutral') {
+        if (selectedBase && !supplyMode) {
+          // Attack mode: send units to attack
+          const fromBase = bases.find(b => b.id === selectedBase);
+          if (fromBase && fromBase.units > 0) {
+            const count = Math.floor(fromBase.units * 0.75);
+            if (count > 0) {
+              sendUnits(selectedBase, clickedBase.id, count, false);
+            }
+          }
+          setSelectedBase(null);
+        }
+      }
+    } else {
+      // Clicked empty space - deselect
+      if (!supplyMode) {
+        setSelectedBase(null);
+      }
+    }
+  };
+
+  // Keyboard controls
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (gameState === 'playing') {
+        if (e.key.toLowerCase() === 's') {
+          setSupplyMode(prev => !prev);
+        } else if (e.key === ' ' || e.key === 'Escape') {
+          e.preventDefault();
+          setIsPaused(prev => !prev);
+        }
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [gameState]);
+
+  // Draw game
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
+    
+    const gradient = ctx.createLinearGradient(0, 0, 0, BASE_HEIGHT);
+    gradient.addColorStop(0, '#1a1a2e');
+    gradient.addColorStop(0.5, '#16213e');
+    gradient.addColorStop(1, '#0f3460');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
+    
+    bases.forEach(base => {
+      if (base.team === 'neutral') return;
+      
+      const grad = ctx.createRadialGradient(base.x, base.y, 0, base.x, base.y, 150);
+      if (base.team === 'hashiba') {
+        grad.addColorStop(0, 'rgba(59, 130, 246, 0.3)');
+        grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
+      } else {
+        grad.addColorStop(0, 'rgba(239, 68, 68, 0.3)');
+        grad.addColorStop(1, 'rgba(239, 68, 68, 0)');
+      }
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
+    });
+    
+    if (selectedBase) {
+      const base = bases.find(b => b.id === selectedBase);
+      if (base) {
+        bases.forEach(target => {
+          if (target.id !== base.id) {
+            const isSupplyTarget = supplyMode && target.team === 'hashiba';
+            ctx.strokeStyle = isSupplyTarget ? 'rgba(34, 197, 94, 0.6)' : 'rgba(255, 255, 255, 0.4)';
+            ctx.lineWidth = isSupplyTarget ? 3 : 2;
+            ctx.setLineDash([8, 8]);
+            ctx.beginPath();
+            ctx.moveTo(base.x, base.y);
+            ctx.lineTo(target.x, target.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        });
+      }
+    }
+    
+    bases.forEach(base => {
+      const color = base.team === 'hashiba' ? '#3b82f6' : 
+                    base.team === 'shibata' ? '#ef4444' : '#6b7280';
+      
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.beginPath();
+      ctx.arc(base.x + 2, base.y + 2, BASE_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(base.x, base.y, BASE_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      
+      if (!base.canProduce && base.team !== 'neutral') {
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      
+      if (base.type === 'hq') {
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+      } else if (base.type === 'elite') {
+        ctx.strokeStyle = '#a855f7';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      } else if (base.type === 'fort') {
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+      
+      if (base.id === selectedBase) {
+        ctx.strokeStyle = supplyMode ? '#22c55e' : '#ffffff';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+      }
+      
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(base.units, base.x, base.y);
+      
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '11px sans-serif';
+      ctx.fillText(base.commander || base.name.substring(0, 4), base.x, base.y + BASE_RADIUS + 15);
+    });
+    
+    units.forEach(unit => {
+      const color = unit.team === 'hashiba' ? '#3b82f6' : '#ef4444';
+      const supplyColor = unit.team === 'hashiba' ? '#22c55e' : '#f97316';
+      
+      ctx.fillStyle = unit.isSupply ? supplyColor : color;
+      ctx.beginPath();
+      ctx.arc(unit.x, unit.y, unit.isElite ? UNIT_RADIUS * 1.3 : UNIT_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      
+      if (unit.isElite) {
+        ctx.strokeStyle = '#a855f7';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    });
+  }, [bases, units, selectedBase, supplyMode]);
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="w-full min-h-screen bg-gradient-to-b from-gray-900 via-blue-900 to-gray-900 flex items-center justify-center p-2 md:p-4">
+      <div ref={containerRef} className="relative" style={{ maxWidth: '100%', maxHeight: '100vh' }}>
+        <canvas
+          ref={canvasRef}
+          width={BASE_WIDTH}
+          height={BASE_HEIGHT}
+          onClick={handleCanvasInteraction}
+          onTouchStart={handleCanvasInteraction}
+          style={{
+            width: `${canvasSize.width}px`,
+            height: `${canvasSize.height}px`,
+            touchAction: 'none'
+          }}
+          className="border-2 md:border-4 border-amber-700 rounded-lg cursor-pointer shadow-2xl"
+        />
+        
+        <div className="absolute top-2 md:top-4 left-2 md:left-4 right-2 md:right-4 flex justify-between items-start gap-2">
+          <div className="bg-black bg-opacity-80 text-white px-2 md:px-5 py-2 md:py-3 rounded-lg border border-amber-600 md:border-2 text-xs md:text-base">
+            <div className="flex items-center gap-1 md:gap-3 mb-1 md:mb-2">
+              <div className="w-3 h-3 md:w-5 md:h-5 bg-blue-500 rounded border border-blue-300 md:border-2"></div>
+              <span className="font-bold">羽柴: {territory.hashiba}</span>
+            </div>
+            <div className="flex items-center gap-1 md:gap-3 mb-1 md:mb-2">
+              <div className="w-3 h-3 md:w-5 md:h-5 bg-red-500 rounded border border-red-300 md:border-2"></div>
+              <span className="font-bold">柴田: {territory.shibata}</span>
+            </div>
+            <div className="border-t border-gray-600 mt-1 md:mt-2 pt-1 md:pt-2">
+              <div className="flex items-center gap-1 md:gap-2 mb-1">
+                <span className="text-xs md:text-sm text-blue-300">🏰 {fortControl.hashiba}/3</span>
+                {fortControl.hashiba === 3 && (
+                  <span className="text-xs text-yellow-400 animate-pulse">
+                    {(10 - fortControl.hashibaTimer).toFixed(1)}秒
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1 md:gap-2">
+                <span className="text-xs md:text-sm text-red-300">🏰 {fortControl.shibata}/3</span>
+                {fortControl.shibata === 3 && (
+                  <span className="text-xs text-yellow-400 animate-pulse">
+                    {(10 - fortControl.shibataTimer).toFixed(1)}秒
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          
+          <div className="bg-black bg-opacity-80 text-amber-400 px-3 md:px-6 py-2 md:py-3 rounded-lg border border-amber-600 md:border-2">
+            <div className="text-xl md:text-3xl font-bold">{formatTime(time)}</div>
+          </div>
+
+          <button
+            onClick={() => setIsPaused(!isPaused)}
+            className="bg-black bg-opacity-80 hover:bg-opacity-100 text-white p-2 md:px-4 md:py-2 rounded-lg border border-amber-600 md:border-2 transition-all"
+          >
+            {isPaused ? <PlayCircle size={isMobile ? 24 : 32} /> : <Pause size={isMobile ? 24 : 32} />}
+          </button>
+        </div>
+        
+        {supplyMode && !isPaused && (
+          <div className="absolute top-16 md:top-24 left-1/2 transform -translate-x-1/2 bg-green-600 bg-opacity-90 text-white px-4 md:px-6 py-1 md:py-2 rounded-lg border-2 border-green-400 animate-pulse">
+            <div className="flex items-center gap-2">
+              <ArrowRight size={isMobile ? 16 : 20} />
+              <span className="font-bold text-sm md:text-base">補給モード</span>
+            </div>
+          </div>
+        )}
+
+        {isMobile && gameState === 'playing' && !isPaused && (
+          <button
+            onClick={() => setSupplyMode(prev => !prev)}
+            className={`absolute bottom-20 right-4 ${supplyMode ? 'bg-green-600' : 'bg-blue-600'} text-white px-4 py-3 rounded-full shadow-lg border-2 border-white z-10`}
+          >
+            <ArrowRight size={24} />
+          </button>
+        )}
+
+        {isPaused && (
+          <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center">
+            <div className="bg-black bg-opacity-90 text-white px-6 md:px-12 py-6 md:py-8 rounded-lg border-2 md:border-4 border-amber-600 mx-4">
+              <div className="text-center">
+                <Pause size={isMobile ? 48 : 64} className="mx-auto mb-4 text-amber-400" />
+                <h2 className="text-2xl md:text-4xl font-bold text-amber-400 mb-4">一時停止</h2>
+                <p className="text-gray-300 mb-6 text-sm md:text-base">
+                  {isMobile ? 'ボタンで再開' : 'SPACEキーまたはESCキーで再開'}
+                </p>
+                <button
+                  onClick={() => setIsPaused(false)}
+                  className="bg-gradient-to-r from-amber-600 to-amber-800 hover:from-amber-700 hover:to-amber-900 text-white font-bold py-3 px-8 rounded-lg border-2 border-amber-400 flex items-center gap-2 mx-auto"
+                >
+                  <PlayCircle size={24} />
+                  再開
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        <div className="absolute bottom-2 md:bottom-4 left-2 md:left-4 bg-black bg-opacity-60 md:bg-opacity-80 text-white px-2 md:px-4 py-1 md:py-3 rounded-lg border border-amber-600 md:border-2 max-w-[180px] md:max-w-md pointer-events-none">
+          <p className="text-xs md:text-sm mb-0.5 md:mb-2">
+            <span className="font-bold text-amber-400">賤ヶ岳の戦い</span>
+          </p>
+          <p className="text-xs leading-tight md:leading-relaxed hidden md:block">
+            <Crown className="inline w-3 h-3 md:w-4 md:h-4 text-yellow-400" /> 本陣 | 
+            <Swords className="inline w-3 h-3 md:w-4 md:h-4 text-purple-400 ml-1 md:ml-2" /> 精鋭
+            <br />
+            <span className="font-bold text-red-400">🏰 3砦10秒保持で即勝利！</span>
+            <br />
+            {!isMobile && (
+              <>
+                <span className="font-bold">通常:</span> 拠点選択 → 敵攻撃 | 
+                <span className="font-bold text-green-400">補給(S):</span> 味方補給
+              </>
+            )}
+          </p>
+          <p className="text-xs leading-tight md:hidden">
+            <span className="font-bold text-red-400">🏰 3砦10秒で勝利</span>
+          </p>
+        </div>
+        
+        {gameState === 'menu' && (
+          <div className="absolute inset-0 bg-black bg-opacity-90 flex items-center justify-center">
+            <div className="text-center px-4">
+              <h1 className="text-4xl md:text-6xl font-bold text-amber-400 mb-2" style={{textShadow: '2px 2px 4px rgba(0,0,0,0.8)'}}>
+                賤ヶ岳の戦い
+              </h1>
+              <p className="text-amber-300 text-lg md:text-xl mb-2">天正11年 (1583年)</p>
+              <p className="text-gray-300 mb-8 max-w-md mx-auto text-sm md:text-base">
+                羽柴秀吉 vs 柴田勝家<br />
+                <span className="text-amber-400 font-bold">3つの砦を10秒保持すれば即勝利！</span>
+              </p>
+              
+              <div className="mb-6">
+                <p className="text-white font-bold mb-4 text-lg">難易度を選択</p>
+                <div className="flex flex-col md:flex-row gap-4 justify-center">
+                  <button
+                    onClick={() => initGame('beginner')}
+                    className="bg-gradient-to-r from-green-600 to-green-800 hover:from-green-700 hover:to-green-900 text-white font-bold py-4 px-8 rounded-lg border-2 border-green-400 shadow-lg"
+                  >
+                    <div className="text-xl mb-1">⚔️ 初級</div>
+                    <div className="text-xs text-green-200">敵の補給なし</div>
+                  </button>
+                  
+                  <button
+                    onClick={() => initGame('advanced')}
+                    className="bg-gradient-to-r from-red-600 to-red-800 hover:from-red-700 hover:to-red-900 text-white font-bold py-4 px-8 rounded-lg border-2 border-red-400 shadow-lg"
+                  >
+                    <div className="text-xl mb-1">🔥 上級</div>
+                    <div className="text-xs text-red-200">敵も補給 + 初期兵力増</div>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {gameState === 'ended' && (
+          <div className="absolute inset-0 bg-black bg-opacity-90 flex items-center justify-center">
+            <div className="text-center px-4">
+              <h1 className="text-4xl md:text-6xl font-bold text-amber-400 mb-4" style={{textShadow: '2px 2px 4px rgba(0,0,0,0.8)'}}>
+                {winner === 'draw' ? '引き分け' : 
+                 winner === 'hashiba' ? '羽柴軍の勝利！' :
+                 winner === 'hashiba-forts' ? '羽柴軍の勝利！' :
+                 winner === 'shibata-forts' ? '柴田軍の勝利！' :
+                 '柴田軍の勝利！'}
+              </h1>
+              <p className="text-gray-300 text-lg md:text-xl mb-4">
+                {winner === 'hashiba-forts' ? '全砦制圧による圧勝！' :
+                 winner === 'shibata-forts' ? '全砦制圧による圧勝！' :
+                 `最終戦況: 羽柴 ${territory.hashiba} - ${territory.shibata} 柴田`}
+              </p>
+              <p className="text-amber-300 mb-6">
+                難易度: {difficulty === 'beginner' ? '⚔️ 初級' : '🔥 上級'}
+              </p>
+              {(winner === 'hashiba' || winner === 'hashiba-forts') && (
+                <p className="text-amber-300 mb-8">
+                  秀吉、天下への道を開く！
+                </p>
+              )}
+              <div className="flex flex-col md:flex-row gap-3 justify-center">
+                <button
+                  onClick={() => initGame(difficulty)}
+                  className="bg-gradient-to-r from-amber-600 to-amber-800 hover:from-amber-700 hover:to-amber-900 text-white font-bold py-3 px-8 rounded-lg border-2 border-amber-400 flex items-center gap-2 mx-auto"
+                >
+                  <RotateCcw size={24} />
+                  同じ難易度で再戦
+                </button>
+                <button
+                  onClick={() => setGameState('menu')}
+                  className="bg-gradient-to-r from-gray-600 to-gray-800 hover:from-gray-700 hover:to-gray-900 text-white font-bold py-3 px-8 rounded-lg border-2 border-gray-400 flex items-center gap-2 mx-auto"
+                >
+                  難易度選択に戻る
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default ShizugatakaGame;
